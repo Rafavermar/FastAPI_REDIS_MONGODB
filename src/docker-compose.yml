@@ -1,0 +1,33 @@
+version: '3'
+services:
+  # Servicio Redis
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+  # Servicio MongoDB
+  mongodb:
+    image: mongo:latest
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  # Servicio FastAPI
+  act4:
+    image: jrvm/eoi-fastapi-act4:v1.1  # Imagen subida a DockerHub
+    container_name: act4
+    ports:
+      - "4242:4242"
+    environment:
+      - API_KEY=R@F@.2024
+      - SECRET_KEY=6921eb8464bdc5e3d79cdc0a3988a7d4113c44df3dd3e47735f64bfcf11b5efe  # Generado con openssl
+    depends_on:
+      - redis
+      - mongodb
+
+volumes:
+  mongo-data:
