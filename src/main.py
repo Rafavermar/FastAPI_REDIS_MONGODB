@@ -1,27 +1,40 @@
+import redis
+from db import get_users_collection
 from fastapi import Depends, HTTPException, Security, Response
 from fastapi import APIRouter
-from db import redis_client, users_collection
 from auth import create_access_token, verify_password, hash_password, verify_api_key, api_key_query
 from models import UserRegister, TokenResponse
 from datetime import timedelta
 from fastapi.security import OAuth2PasswordRequestForm
-
+from fastapi import Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from load_data import load_movies
 import os
+from typing import cast
+from starlette.datastructures import State
+
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS512"
 
 
+def get_redis_client(request: Request):
+    return request.app.state.redis_client
+
+
 @asynccontextmanager
 async def lifespan(_):
+    app.state.redis_client = redis.Redis(host='redis', port=6379, db=0)
+    # Usar cast para indicar el tipo de app.state
+    app.state = cast(State, app.state)
     # Cargar las películas en Redis al iniciar la aplicación
-    load_movies()
+    load_movies(app.state.redis_client)
     yield
+    # Cerrar la conexión de Redis al finalizar
+    app.state.redis_client.close()
 
 
 # Inicializamos FastAPI con el lifespan
@@ -48,7 +61,8 @@ router = APIRouter(
     },
     status_code=204
 )
-async def register_user(user: UserRegister, api_key: str = Security(api_key_query)):
+async def register_user(user: UserRegister, api_key: str = Security(api_key_query),
+                        users_collection=Depends(get_users_collection)):
     verify_api_key(api_key)  # Verifica si la API Key es válida
 
     allowed_ratings = ["G", "PG", "PG-13", "R", "NC-17"]
@@ -81,7 +95,8 @@ async def register_user(user: UserRegister, api_key: str = Security(api_key_quer
     },
     status_code=200
 )
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(),
+                                 users_collection=Depends(get_users_collection)):
     # Buscar el usuario en la base de datos
     db_user = users_collection.find_one({"username": form_data.username})
     if not db_user or not verify_password(form_data.password, db_user["hashed_password"]):
@@ -96,6 +111,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
 
     return {"access_token": access_token, "token_type": "bearer"}
 
+
 # Ruta para obtener películas por content rating
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="act4/token")
 
@@ -106,12 +122,15 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="act4/token")
     description="Devuelve una lista de las 10 películas mejor valoradas, filtradas por la calificación de contenido del usuario autenticado.",
     response_description="Lista de películas filtradas.",
     responses={
-        200: {"description": "Lista de películas encontradas", "content": {"application/json": {"example": [{"movie_title": "Inception", "original_release_date": "2010-07-16", "genres": ["Action", "Sci-Fi"], "content_rating": "PG-13", "tomatometer_rating": 87}]}}},
+        200: {"description": "Lista de películas encontradas", "content": {"application/json": {"example": [
+            {"movie_title": "Inception", "original_release_date": "2010-07-16", "genres": ["Action", "Sci-Fi"],
+             "content_rating": "PG-13", "tomatometer_rating": 87}]}}},
         401: {"description": "Token inválido o no autorizado", "headers": {"WWW-Authenticate": {"schema": "Bearer"}}}
     },
     status_code=200
 )
-async def get_movies_by_content_rating(response: Response, token: str = Depends(oauth2_scheme)):
+async def get_movies_by_content_rating(response: Response, token: str = Depends(oauth2_scheme),
+                                       redis_client=Depends(get_redis_client)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         content_rating = payload.get("cr")
@@ -149,12 +168,14 @@ async def get_movies_by_content_rating(response: Response, token: str = Depends(
     description="Devuelve el número de claves almacenadas en Redis.",
     response_description="Número total de claves en Redis.",
     responses={
-        200: {"description": "Número de claves en Redis", "content": {"application/json": {"example": {"key_list_size": 42}}}},
+        200: {"description": "Número de claves en Redis",
+              "content": {"application/json": {"example": {"key_list_size": 42}}}},
         401: {"description": "API Key no válida"}
     },
     status_code=200
 )
-async def key_list_size(response: Response, api_key: str = Security(api_key_query)):
+async def key_list_size(response: Response, api_key: str = Security(api_key_query),
+                        redis_client=Depends(get_redis_client)):
     try:
         verify_api_key(api_key)  # Verificar si la API Key es válida
         num_keys = redis_client.dbsize()

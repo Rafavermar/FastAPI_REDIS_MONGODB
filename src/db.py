@@ -1,10 +1,20 @@
-import redis
+# db.py
 from pymongo import MongoClient
+from fastapi import Depends
 
-# Conexión a Redis
-redis_client = redis.Redis(host='redis', port=6379, db=0)
 
-# Conexión a MongoDB (para almacenar credenciales)
-mongo_client = MongoClient('mongodb://mongo:27017/')
-mongo_db = mongo_client['actividad4_db']
-users_collection = mongo_db['users']
+def get_mongo_client():
+    client = MongoClient('mongodb://mongo:27017/')
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+def get_users_collection(client=Depends(get_mongo_client)):
+    db = client['actividad4_db']
+    collection = db['users']
+    try:
+        yield collection
+    finally:
+        pass  # No necesitamos cerrar nada aquí
