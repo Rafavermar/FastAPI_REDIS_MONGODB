@@ -69,7 +69,6 @@ Si deseas cambiarlas, puedes editarlas directamente en docker-compose.yml o agre
 
 ### 3. Levantar los contenedores con docker-compose
 ```bash
-Copiar código
 docker-compose up -d
 ```
 Este comando levantará tres contenedores:
