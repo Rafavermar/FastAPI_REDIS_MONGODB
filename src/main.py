@@ -3,7 +3,7 @@ from db import get_users_collection
 from fastapi import Depends, HTTPException, Security, Response
 from fastapi import APIRouter
 from auth import create_access_token, verify_password, hash_password, verify_api_key, api_key_query
-from models import UserRegister, TokenResponse
+from models import UserRegister, TokenResponse, MoviesResponse, Movie
 from datetime import timedelta
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi import Request
@@ -54,10 +54,9 @@ router = APIRouter(
     summary="Registrar nuevo usuario",
     response_description="Usuario registrado exitosamente.",
     responses={
-        400: {"description": "El usuario ya está registrado"},
-        400: {"description": "Bad Request"},
-        422: {"description": "Calificación de contenido inválida"},
+        400: {"description": "El usuario ya está registrado o contenido rating inválido"},
         401: {"description": "No autorizado. Api key no válida"},
+        422: {"description": "Error de validación en username/password"}
     },
     status_code=204
 )
@@ -118,6 +117,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="act4/token")
 
 @router.get(
     "/movies-by-content-rating",
+    response_model=MoviesResponse,
     summary="Obtener películas por calificación",
     description="Devuelve una lista de las 10 películas mejor valoradas, filtradas por la calificación de contenido del usuario autenticado.",
     response_description="Lista de películas filtradas.",
@@ -129,8 +129,11 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="act4/token")
     },
     status_code=200
 )
-async def get_movies_by_content_rating(response: Response, token: str = Depends(oauth2_scheme),
-                                       redis_client=Depends(get_redis_client)):
+async def get_movies_by_content_rating(
+        response: Response,
+        token: str = Depends(oauth2_scheme),
+        redis_client=Depends(get_redis_client)
+):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         content_rating = payload.get("cr")
@@ -141,19 +144,23 @@ async def get_movies_by_content_rating(response: Response, token: str = Depends(
         movies = []
         for key in redis_client.scan_iter():
             movie = eval(redis_client.get(key))
+
+            # Aquí parseamos "genres". Suponiendo que en el CSV está separado por comas:
+            genres_array = [g.strip() for g in movie["genres"].split(",")]
+
             if movie['content_rating'] == content_rating:
-                movies.append({
-                    "movie_title": movie["movie_title"],
-                    "original_release_date": movie["original_release_date"],
-                    "genres": movie["genres"],
-                    "content_rating": movie["content_rating"],
-                    "tomatometer_rating": movie["tomatometer_rating"]
-                })
+                movies.append(Movie(
+                    movie_title=movie["movie_title"],
+                    original_release_date=movie["original_release_date"],
+                    genres=genres_array,
+                    content_rating=movie["content_rating"],
+                    tomatometer_rating=int(movie["tomatometer_rating"])
+                ))
 
         # Ordenar por tomatometer_rating y devolver las 10 mejores
-        movies = sorted(movies, key=lambda x: x["tomatometer_rating"], reverse=True)[:10]
+        movies = sorted(movies, key=lambda x: x.tomatometer_rating, reverse=True)[:10]
 
-        return {"movies": movies}
+        return MoviesResponse(movies=movies)
 
     except JWTError:
         # En caso de error de JWT, devolver 401 con la cabecera "WWW-Authenticate"
